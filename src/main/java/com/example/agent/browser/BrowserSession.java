@@ -6,6 +6,10 @@ import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 
+/**
+ * Управляет жизненным циклом браузера.
+ * Мы создаем отдельный класс, чтобы код запуска браузера не размазывался по приложению.
+ */
 public class BrowserSession implements AutoCloseable {
     private final Playwright playwright;
     private final Browser browser;

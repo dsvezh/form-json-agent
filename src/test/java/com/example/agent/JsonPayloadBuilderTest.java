@@ -8,21 +8,34 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * Проверяет, что плоские значения корректно превращаются во вложенный JSON.
+ */
 public class JsonPayloadBuilderTest {
 
     @Test
-    void shouldWrapFlatValuesIntoPayloadObject() {
+    void shouldBuildNestedPayloadUsingMappingRules() {
         JsonPayloadBuilder builder = new JsonPayloadBuilder();
 
-        Map<String, Object> flat = Map.of(
+        Map<String, Object> flatValues = Map.of(
             "country", "us",
-            "email", "test@example.com"
-                                         );
+            "amount", 100
+                                               );
 
-        Map<String, Object> result = builder.build(flat);
+        Map<String, String> mapping = Map.of(
+            "country", "payload.customer.country",
+            "amount", "payload.payment.amount"
+                                            );
+
+        Map<String, Object> result = builder.build(flatValues, mapping);
 
         assertTrue(result.containsKey("payload"));
+
         Map<?, ?> payload = (Map<?, ?>) result.get("payload");
-        assertEquals("us", payload.get("country"));
+        Map<?, ?> customer = (Map<?, ?>) payload.get("customer");
+        Map<?, ?> payment = (Map<?, ?>) payload.get("payment");
+
+        assertEquals("us", customer.get("country"));
+        assertEquals(100, payment.get("amount"));
     }
 }

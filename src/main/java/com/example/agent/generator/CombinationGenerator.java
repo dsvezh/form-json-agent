@@ -1,5 +1,6 @@
 package com.example.agent.generator;
 
+import com.example.agent.model.FieldDependencySnapshot;
 import com.example.agent.model.FieldDescriptor;
 import com.example.agent.model.FieldOption;
 import com.example.agent.model.FormSchema;
@@ -9,15 +10,20 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Генерирует сценарии заполнения формы.
+ * Важная идея: мы не делаем "все со всем" без ограничений,
+ * а пытаемся учитывать зависимые dropdown и лимит сценариев.
+ */
 public class CombinationGenerator {
 
     public List<Map<String, Object>> generate(FormSchema schema, int limit) {
         List<Map<String, Object>> results = new ArrayList<>();
-        backtrack(schema.getFields(), 0, new LinkedHashMap<>(), results, limit);
+        backtrack(schema, 0, new LinkedHashMap<>(), results, limit);
         return results;
     }
 
-    private void backtrack(List<FieldDescriptor> fields,
+    private void backtrack(FormSchema schema,
                            int index,
                            Map<String, Object> current,
                            List<Map<String, Object>> results,
@@ -26,6 +32,7 @@ public class CombinationGenerator {
             return;
         }
 
+        List<FieldDescriptor> fields = schema.getFields();
         if (index == fields.size()) {
             results.add(new LinkedHashMap<>(current));
             return;
@@ -34,9 +41,9 @@ public class CombinationGenerator {
         FieldDescriptor field = fields.get(index);
 
         if ("select".equals(field.getType()) && !field.getOptions().isEmpty()) {
-            for (FieldOption option : field.getOptions()) {
+            for (FieldOption option : resolveAvailableOptions(schema, field, current)) {
                 current.put(field.getKey(), option.value());
-                backtrack(fields, index + 1, current, results, limit);
+                backtrack(schema, index + 1, current, results, limit);
                 current.remove(field.getKey());
 
                 if (results.size() >= limit) {
@@ -46,18 +53,43 @@ public class CombinationGenerator {
             return;
         }
 
+        // Для обычных полей берем безопасные тестовые значения.
         current.put(field.getKey(), sampleValue(field));
-        backtrack(fields, index + 1, current, results, limit);
+        backtrack(schema, index + 1, current, results, limit);
         current.remove(field.getKey());
+    }
+
+    private List<FieldOption> resolveAvailableOptions(FormSchema schema,
+                                                      FieldDescriptor field,
+                                                      Map<String, Object> current) {
+        if (field.getDependsOn() == null || field.getDependsOn().isBlank()) {
+            return field.getOptions();
+        }
+
+        Object parentValue = current.get(field.getDependsOn());
+        if (parentValue == null) {
+            return field.getOptions();
+        }
+
+        List<FieldOption> dependentOptions = schema.getDependencySnapshots().stream()
+                                                   .filter(snapshot -> snapshot.getChildField().equals(field.getKey()))
+                                                   .filter(snapshot -> snapshot.getParentField().equals(field.getDependsOn()))
+                                                   .filter(snapshot -> snapshot.getParentValue().equals(parentValue.toString()))
+                                                   .flatMap(snapshot -> snapshot.getOptions().stream())
+                                                   .distinct()
+                                                   .toList();
+
+        return dependentOptions.isEmpty() ? field.getOptions() : dependentOptions;
     }
 
     private Object sampleValue(FieldDescriptor field) {
         return switch (field.getType()) {
-            case "number" -> 100;
+            case "number", "range" -> 100;
             case "email" -> "test@example.com";
             case "checkbox" -> true;
-            case "textarea" -> "sample text";
-            case "date" -> "2026-04-02";
+            case "textarea" -> "Sample text for generated payload";
+            case "date" -> "2026-04-03";
+            case "tel" -> "+79001234567";
             default -> "sample";
         };
     }

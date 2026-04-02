@@ -3,11 +3,19 @@ package com.example.agent.model;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Полное описание одного поля формы.
+ * Такой объект удобен тем, что дальше генератору и билдеру JSON уже не нужно
+ * читать DOM-элементы напрямую: достаточно работать с этой моделью.
+ */
 public class FieldDescriptor {
     private String key;
     private String label;
     private String type;
     private boolean required;
+    private boolean customDropdown;
+    private String selector;
+    private String dependsOn;
     private List<FieldOption> options = new ArrayList<>();
 
     public FieldDescriptor() {
@@ -50,6 +58,30 @@ public class FieldDescriptor {
 
     public void setRequired(boolean required) {
         this.required = required;
+    }
+
+    public boolean isCustomDropdown() {
+        return customDropdown;
+    }
+
+    public void setCustomDropdown(boolean customDropdown) {
+        this.customDropdown = customDropdown;
+    }
+
+    public String getSelector() {
+        return selector;
+    }
+
+    public void setSelector(String selector) {
+        this.selector = selector;
+    }
+
+    public String getDependsOn() {
+        return dependsOn;
+    }
+
+    public void setDependsOn(String dependsOn) {
+        this.dependsOn = dependsOn;
     }
 
     public List<FieldOption> getOptions() {

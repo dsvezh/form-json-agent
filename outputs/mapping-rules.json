@@ -1,0 +1,7 @@
+{
+  "country" : "payload.customer.country",
+  "state" : "payload.customer.state",
+  "email" : "payload.customer.email",
+  "amount" : "payload.payment.amount",
+  "notes" : "payload.meta.notes"
+}

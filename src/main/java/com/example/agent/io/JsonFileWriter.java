@@ -7,6 +7,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+/**
+ * Сохраняет любые Java-объекты в JSON-файлы.
+ */
 public class JsonFileWriter {
     private final ObjectMapper objectMapper = new ObjectMapper()
                                                   .enable(SerializationFeature.INDENT_OUTPUT);
