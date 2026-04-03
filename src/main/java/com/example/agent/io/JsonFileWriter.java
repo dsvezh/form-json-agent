@@ -12,7 +12,7 @@ import java.nio.file.Path;
  */
 public class JsonFileWriter {
     private final ObjectMapper objectMapper = new ObjectMapper()
-                                                  .enable(SerializationFeature.INDENT_OUTPUT);
+            .enable(SerializationFeature.INDENT_OUTPUT);
 
     public void write(Path path, Object data) {
         try {

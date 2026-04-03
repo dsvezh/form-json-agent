@@ -23,16 +23,16 @@ public class CombinationGeneratorTest {
     void shouldGenerateCombinationsForDependentSelectFields() {
         FieldDescriptor country = new FieldDescriptor("country", "Country", "select", true);
         country.setOptions(List.of(
-            new FieldOption("us", "USA"),
-            new FieldOption("de", "Germany")
-                                  ));
+                new FieldOption("us", "USA"),
+                new FieldOption("de", "Germany")
+        ));
 
         FieldDescriptor state = new FieldDescriptor("state", "State", "select", true);
         state.setDependsOn("country");
         state.setOptions(List.of(
-            new FieldOption("ca", "California"),
-            new FieldOption("bw", "Baden-Wurttemberg")
-                                ));
+                new FieldOption("ca", "California"),
+                new FieldOption("bw", "Baden-Wurttemberg")
+        ));
 
         FieldDependencySnapshot usSnapshot = new FieldDependencySnapshot();
         usSnapshot.setParentField("country");

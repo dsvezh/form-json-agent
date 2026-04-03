@@ -1,6 +1,5 @@
 package com.example.agent.generator;
 
-import com.example.agent.model.FieldDependencySnapshot;
 import com.example.agent.model.FieldDescriptor;
 import com.example.agent.model.FieldOption;
 import com.example.agent.model.FormSchema;
@@ -72,12 +71,12 @@ public class CombinationGenerator {
         }
 
         List<FieldOption> dependentOptions = schema.getDependencySnapshots().stream()
-                                                   .filter(snapshot -> snapshot.getChildField().equals(field.getKey()))
-                                                   .filter(snapshot -> snapshot.getParentField().equals(field.getDependsOn()))
-                                                   .filter(snapshot -> snapshot.getParentValue().equals(parentValue.toString()))
-                                                   .flatMap(snapshot -> snapshot.getOptions().stream())
-                                                   .distinct()
-                                                   .toList();
+                .filter(snapshot -> snapshot.getChildField().equals(field.getKey()))
+                .filter(snapshot -> snapshot.getParentField().equals(field.getDependsOn()))
+                .filter(snapshot -> snapshot.getParentValue().equals(parentValue.toString()))
+                .flatMap(snapshot -> snapshot.getOptions().stream())
+                .distinct()
+                .toList();
 
         return dependentOptions.isEmpty() ? field.getOptions() : dependentOptions;
     }

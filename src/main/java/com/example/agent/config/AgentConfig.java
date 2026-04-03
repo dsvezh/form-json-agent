@@ -2,7 +2,10 @@ package com.example.agent.config;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * Хранит настройки приложения.
@@ -17,6 +20,9 @@ public class AgentConfig {
     private final String outputDir;
     private final boolean scanCustomDropdowns;
     private final boolean captureNetwork;
+    private final boolean scanDependencies;
+    private final int maxDependencyPairs;
+    private final Set<String> dependencyAllowedFields;
     private final String networkUrlContains;
     private final String mappingFile;
 
@@ -27,6 +33,9 @@ public class AgentConfig {
                        String outputDir,
                        boolean scanCustomDropdowns,
                        boolean captureNetwork,
+                       boolean scanDependencies,
+                       int maxDependencyPairs,
+                       Set<String> dependencyAllowedFields,
                        String networkUrlContains,
                        String mappingFile) {
         this.url = url;
@@ -36,6 +45,9 @@ public class AgentConfig {
         this.outputDir = outputDir;
         this.scanCustomDropdowns = scanCustomDropdowns;
         this.captureNetwork = captureNetwork;
+        this.scanDependencies = scanDependencies;
+        this.maxDependencyPairs = maxDependencyPairs;
+        this.dependencyAllowedFields = dependencyAllowedFields;
         this.networkUrlContains = networkUrlContains;
         this.mappingFile = mappingFile;
     }
@@ -63,9 +75,23 @@ public class AgentConfig {
             properties.getProperty("agent.outputDir", "outputs"),
             Boolean.parseBoolean(properties.getProperty("agent.scanCustomDropdowns", "true")),
             Boolean.parseBoolean(properties.getProperty("agent.captureNetwork", "true")),
+            Boolean.parseBoolean(properties.getProperty("agent.scanDependencies", "false")),
+            Integer.parseInt(properties.getProperty("agent.maxDependencyPairs", "5")),
+            parseCsvSet(properties.getProperty("agent.dependencyAllowedFields", "")),
             properties.getProperty("agent.networkUrlContains", "").trim(),
             properties.getProperty("agent.mappingFile", "src/main/resources/mapping-rules.json")
         );
+    }
+
+    private static Set<String> parseCsvSet(String value) {
+        if (value == null || value.isBlank()) {
+            return Set.of();
+        }
+
+        return Arrays.stream(value.split(","))
+                     .map(String::trim)
+                     .filter(item -> !item.isBlank())
+                     .collect(LinkedHashSet::new, Set::add, Set::addAll);
     }
 
     public String getUrl() {
@@ -94,6 +120,18 @@ public class AgentConfig {
 
     public boolean isCaptureNetwork() {
         return captureNetwork;
+    }
+
+    public boolean isScanDependencies() {
+        return scanDependencies;
+    }
+
+    public int getMaxDependencyPairs() {
+        return maxDependencyPairs;
+    }
+
+    public Set<String> getDependencyAllowedFields() {
+        return dependencyAllowedFields;
     }
 
     public String getNetworkUrlContains() {

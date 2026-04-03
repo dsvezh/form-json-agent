@@ -18,14 +18,14 @@ public class JsonPayloadBuilderTest {
         JsonPayloadBuilder builder = new JsonPayloadBuilder();
 
         Map<String, Object> flatValues = Map.of(
-            "country", "us",
-            "amount", 100
-                                               );
+                "country", "us",
+                "amount", 100
+        );
 
         Map<String, String> mapping = Map.of(
-            "country", "payload.customer.country",
-            "amount", "payload.payment.amount"
-                                            );
+                "country", "payload.customer.country",
+                "amount", "payload.payment.amount"
+        );
 
         Map<String, Object> result = builder.build(flatValues, mapping);
 

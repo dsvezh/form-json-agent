@@ -12,17 +12,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
  * Читает форму со страницы и строит FormSchema.
  *
- * Что важно в этой версии:
- * - селекторы по id строятся безопасно даже для id с точками;
- * - disabled-поля не участвуют в анализе зависимостей;
- * - placeholder-значения не выбираются;
- * - таймауты на selectOption уменьшены, чтобы приложение не "висело" минутами;
- * - анализ зависимостей ограничен, чтобы не перебирать без необходимости все select подряд.
+ * Эта версия сканера старается забирать вообще все поля формы:
+ * - обычные input/select/textarea;
+ * - поля, построенные через contenteditable и ARIA roles;
+ * - кастомные dropdown;
+ * - вложенные поля внутри любых контейнеров формы.
+ *
+ * Также здесь аккуратно ограничен dependency scan, чтобы приложение не зависало
+ * на неактивных или disabled dropdown.
  */
 public class FormScanner {
     private static final double WAIT_TIMEOUT_MS = 10_000;
@@ -30,12 +33,19 @@ public class FormScanner {
     private static final double SELECT_TIMEOUT_MS = 2_000;
 
     /**
-     * Ограничиваем число пар полей для dependency scan.
-     * Это защищает от долгого перебора на больших формах.
+     * Базовый набор селекторов для всех полей, которые мы считаем вводом.
+     * Здесь есть не только нативные input/select/textarea, но и кастомные поля,
+     * которые часто встречаются в современных UI-библиотеках.
      */
-    private static final int MAX_DEPENDENCY_PAIRS = 5;
+    private static final String NATIVE_FIELD_SELECTOR =
+            "input, select, textarea, [contenteditable='true'], [role='textbox'], [role='spinbutton'], [role='checkbox'], [role='radio']";
 
-    public FormSchema scan(Page page, String formSelector, boolean scanCustomDropdowns) {
+    public FormSchema scan(Page page,
+                           String formSelector,
+                           boolean scanCustomDropdowns,
+                           boolean scanDependencies,
+                           int maxDependencyPairs,
+                           Set<String> dependencyAllowedFields) {
         System.out.println("FormScanner: waiting for selector: " + formSelector);
 
         Locator form = page.locator(formSelector).first();
@@ -59,53 +69,60 @@ public class FormScanner {
             fields.addAll(customFields);
         }
 
-        List<FieldDescriptor> mergedFields = mergeByKey(fields);
+        List<FieldDescriptor> mergedFields = mergeFields(fields);
         schema.setFields(mergedFields);
 
         System.out.println("FormScanner: merged fields count = " + mergedFields.size());
 
-        System.out.println("FormScanner: capturing dependencies");
-        List<FieldDependencySnapshot> snapshots = captureDependencies(page, schema);
-        schema.setDependencySnapshots(snapshots);
-        System.out.println("FormScanner: dependency snapshots count = " + snapshots.size());
+        if (scanDependencies) {
+            System.out.println("FormScanner: capturing dependencies");
+            List<FieldDependencySnapshot> snapshots = captureDependencies(page, schema, maxDependencyPairs, dependencyAllowedFields);
+            schema.setDependencySnapshots(snapshots);
+            System.out.println("FormScanner: dependency snapshots count = " + snapshots.size());
+        } else {
+            System.out.println("FormScanner: dependency scan disabled by config");
+            schema.setDependencySnapshots(List.of());
+        }
 
         return schema;
     }
 
     private List<FieldDescriptor> scanNativeFields(Page page, Locator form) {
         List<FieldDescriptor> fields = new ArrayList<>();
-        List<ElementHandle> elements = form.locator("input, select, textarea").elementHandles();
+        List<ElementHandle> elements = form.locator(NATIVE_FIELD_SELECTOR).elementHandles();
 
         System.out.println("FormScanner: native DOM elements count = " + elements.size());
 
-        for (ElementHandle element : elements) {
+        for (int index = 0; index < elements.size(); index++) {
+            ElementHandle element = elements.get(index);
+
             String tag = stringValue(element.evaluate("el => el.tagName.toLowerCase()"));
             String name = attr(element, "name");
             String id = attr(element, "id");
-            String key = firstNonBlank(name, id, "unnamed_field");
-            String type = "input".equals(tag) ? firstNonBlank(attr(element, "type"), "text") : tag;
-            boolean required = element.getAttribute("required") != null;
+            String type = resolveFieldType(element, tag);
+            boolean required = isRequired(element);
             String label = resolveLabel(page, element, id, name);
+            String key = buildFieldKey(name, id, label, type, index);
 
             FieldDescriptor descriptor = new FieldDescriptor(
-                key,
-                label,
-                normalizeType(tag, type),
-                required
+                    key,
+                    label,
+                    type,
+                    required
             );
 
-            descriptor.setSelector(buildSelector(id, name, null));
+            descriptor.setSelector(buildSelector(id, name, index));
 
-            if ("select".equals(tag)) {
+            if ("select".equals(type)) {
                 descriptor.setOptions(readNativeSelectOptions(element));
             }
 
             fields.add(descriptor);
 
             System.out.println("FormScanner: native field found -> key=" + descriptor.getKey()
-                               + ", type=" + descriptor.getType()
-                               + ", selector=" + descriptor.getSelector()
-                               + ", options=" + descriptor.getOptions().size());
+                    + ", type=" + descriptor.getType()
+                    + ", selector=" + descriptor.getSelector()
+                    + ", options=" + descriptor.getOptions().size());
         }
 
         return fields;
@@ -124,7 +141,7 @@ public class FormScanner {
             String id = safeAttribute(dropdown, "id");
             String name = safeAttribute(dropdown, "name");
             String label = resolveCustomLabel(page, dropdown, id, name, i);
-            String key = firstNonBlank(name, id, toMachineKey(label), "custom_dropdown_" + i);
+            String key = buildFieldKey(name, id, label, "select", i);
 
             FieldDescriptor descriptor = new FieldDescriptor(key, label, "select", isRequired(dropdown));
             descriptor.setCustomDropdown(true);
@@ -134,27 +151,31 @@ public class FormScanner {
             fields.add(descriptor);
 
             System.out.println("FormScanner: custom dropdown found -> key=" + descriptor.getKey()
-                               + ", selector=" + descriptor.getSelector()
-                               + ", options=" + descriptor.getOptions().size());
+                    + ", selector=" + descriptor.getSelector()
+                    + ", options=" + descriptor.getOptions().size());
         }
 
         return fields;
     }
 
-    private List<FieldDependencySnapshot> captureDependencies(Page page, FormSchema schema) {
+    private List<FieldDependencySnapshot> captureDependencies(Page page,
+                                                              FormSchema schema,
+                                                              int maxDependencyPairs,
+                                                              Set<String> dependencyAllowedFields) {
         List<FieldDependencySnapshot> snapshots = new ArrayList<>();
 
         List<FieldDescriptor> selectableFields = schema.getFields().stream()
-                                                       .filter(field -> "select".equals(field.getType()))
-                                                       .filter(field -> !field.getOptions().isEmpty())
-                                                       .toList();
+                .filter(field -> "select".equals(field.getType()))
+                .filter(field -> !field.getOptions().isEmpty())
+                .filter(field -> isAllowedForDependencyScan(field, dependencyAllowedFields))
+                .toList();
 
         System.out.println("FormScanner: selectable fields for dependency analysis = " + selectableFields.size());
 
         int checkedPairs = 0;
 
         for (int i = 0; i < selectableFields.size() - 1; i++) {
-            if (checkedPairs >= MAX_DEPENDENCY_PAIRS) {
+            if (checkedPairs >= maxDependencyPairs) {
                 System.out.println("FormScanner: dependency analysis limit reached");
                 break;
             }
@@ -204,9 +225,9 @@ public class FormScanner {
                 List<FieldOption> childOptions = rereadOptions(page, child);
 
                 List<FieldOption> filteredChildOptions = childOptions.stream()
-                                                                     .filter(optionItem -> !isPlaceholderOption(optionItem))
-                                                                     .distinct()
-                                                                     .toList();
+                        .filter(optionItem -> !isPlaceholderOption(optionItem))
+                        .distinct()
+                        .toList();
 
                 if (!filteredChildOptions.isEmpty()) {
                     child.setDependsOn(parent.getKey());
@@ -219,9 +240,9 @@ public class FormScanner {
                     snapshots.add(snapshot);
 
                     System.out.println("FormScanner: dependency snapshot added -> "
-                                       + parent.getKey() + "=" + option.value()
-                                       + " -> " + child.getKey()
-                                       + " options=" + filteredChildOptions.size());
+                            + parent.getKey() + "=" + option.value()
+                            + " -> " + child.getKey()
+                            + " options=" + filteredChildOptions.size());
                 }
             }
         }
@@ -283,8 +304,8 @@ public class FormScanner {
             return true;
         } catch (Exception e) {
             System.out.println("FormScanner: selectValue failed for field=" + field.getKey()
-                               + ", value=" + value
-                               + ", reason=" + e.getMessage());
+                    + ", value=" + value
+                    + ", reason=" + e.getMessage());
             return false;
         }
     }
@@ -378,9 +399,53 @@ public class FormScanner {
         return firstNonBlank(ariaLabel, name, "custom_dropdown_" + index);
     }
 
+    private String resolveFieldType(ElementHandle element, String tag) {
+        if ("select".equals(tag)) {
+            return "select";
+        }
+        if ("textarea".equals(tag)) {
+            return "textarea";
+        }
+
+        String role = attr(element, "role").toLowerCase();
+        if ("textbox".equals(role)) {
+            return "text";
+        }
+        if ("spinbutton".equals(role)) {
+            return "number";
+        }
+        if ("checkbox".equals(role)) {
+            return "checkbox";
+        }
+        if ("radio".equals(role)) {
+            return "radio";
+        }
+
+        if ("input".equals(tag)) {
+            return firstNonBlank(attr(element, "type"), "text");
+        }
+
+        if ("true".equalsIgnoreCase(attr(element, "contenteditable"))) {
+            return "contenteditable";
+        }
+
+        return firstNonBlank(tag, "text");
+    }
+
+    private String buildFieldKey(String name, String id, String label, String type, int index) {
+        String baseKey = firstNonBlank(name, id, toMachineKey(label));
+
+        // Если у поля вообще нет явного имени, все равно создаем стабильный ключ,
+        // чтобы поле не потерялось в схеме.
+        if (baseKey.isBlank()) {
+            baseKey = firstNonBlank(type, "field") + "_" + index;
+        }
+
+        return baseKey;
+    }
+
     private String buildSelector(String id, String name, Integer fallbackIndex) {
         if (id != null && !id.isBlank()) {
-            // Такой селектор безопасен даже если в id есть точки, двоеточия и другие спецсимволы CSS.
             return "[id='" + id + "']";
         }
 
@@ -389,19 +454,19 @@ public class FormScanner {
         }
 
         if (fallbackIndex != null) {
-            return "[role='combobox']:nth-of-type(" + (fallbackIndex + 1) + ")";
+            return ":nth-match(" + NATIVE_FIELD_SELECTOR + ", " + (fallbackIndex + 1) + ")";
         }
 
         return null;
     }
 
-    private List<FieldDescriptor> mergeByKey(List<FieldDescriptor> fields) {
+    private List<FieldDescriptor> mergeFields(List<FieldDescriptor> fields) {
         List<FieldDescriptor> merged = new ArrayList<>();
 
         for (FieldDescriptor field : fields) {
             Optional<FieldDescriptor> existing = merged.stream()
-                                                       .filter(candidate -> candidate.getKey().equals(field.getKey()))
-                                                       .findFirst();
+                    .filter(candidate -> sameField(candidate, field))
+                    .findFirst();
 
             if (existing.isPresent()) {
                 if (existing.get().getOptions().isEmpty() && !field.getOptions().isEmpty()) {
@@ -421,16 +486,31 @@ public class FormScanner {
         return merged;
     }
 
+    private boolean sameField(FieldDescriptor left, FieldDescriptor right) {
+        if (left.getSelector() != null && right.getSelector() != null) {
+            return left.getSelector().equals(right.getSelector());
+        }
+
+        return left.getKey().equals(right.getKey())
+                && left.getType().equals(right.getType())
+                && left.isCustomDropdown() == right.isCustomDropdown();
+    }
+
     private List<FieldOption> uniqueOptions(List<FieldOption> options) {
         return options.stream()
-                      .filter(option -> option.label() != null && !option.label().isBlank())
-                      .distinct()
-                      .collect(Collectors.toList());
+                .filter(option -> option.label() != null && !option.label().isBlank())
+                .distinct()
+                .collect(Collectors.toList());
     }
 
     private boolean isRequired(Locator locator) {
         return !safeAttribute(locator, "required").isBlank()
-               || "true".equalsIgnoreCase(safeAttribute(locator, "aria-required"));
+                || "true".equalsIgnoreCase(safeAttribute(locator, "aria-required"));
+    }
+
+    private boolean isRequired(ElementHandle element) {
+        return element.getAttribute("required") != null
+                || "true".equalsIgnoreCase(attr(element, "aria-required"));
     }
 
     private boolean isInteractable(Locator locator) {
@@ -449,14 +529,22 @@ public class FormScanner {
         }
     }
 
+    private boolean isAllowedForDependencyScan(FieldDescriptor field, Set<String> dependencyAllowedFields) {
+        if (dependencyAllowedFields == null || dependencyAllowedFields.isEmpty()) {
+            return true;
+        }
+
+        return dependencyAllowedFields.contains(field.getKey());
+    }
+
     private boolean isPlaceholderOption(FieldOption option) {
         String value = option.value() == null ? "" : option.value().trim();
         String label = option.label() == null ? "" : option.label().trim().toLowerCase();
 
         return value.isBlank()
-               || "null".equalsIgnoreCase(value)
-               || label.contains("выберите")
-               || label.contains("select");
+                || "null".equalsIgnoreCase(value)
+                || label.contains("выберите")
+                || label.contains("select");
     }
 
     private String attr(ElementHandle element, String name) {
@@ -481,16 +569,6 @@ public class FormScanner {
         }
     }
 
-    private String normalizeType(String tag, String type) {
-        if ("select".equals(tag)) {
-            return "select";
-        }
-        if ("textarea".equals(tag)) {
-            return "textarea";
-        }
-        return type == null || type.isBlank() ? "text" : type.toLowerCase();
-    }
-
     private String firstNonBlank(String... values) {
         for (String value : values) {
             if (value != null && !value.isBlank()) {
@@ -506,7 +584,7 @@ public class FormScanner {
 
     private String toMachineKey(String label) {
         return label.toLowerCase()
-                    .replaceAll("[^a-z0-9]+", "_")
-                    .replaceAll("^_+|_+$", "");
+                .replaceAll("[^a-z0-9]+", "_")
+                .replaceAll("^_+|_+$", "");
     }
 }
